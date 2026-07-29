@@ -29,6 +29,7 @@
     mode: "move",
     pieces: [], // {id, team, num, x, y, el, circle}
     ball: null, // {x, y, el}
+    ballOwner: null,     // ボールを保持している選手のid (null=フリー)
     arrows: [],          // 箭头对象数组 {el, path, end}
     selectedArrow: null, // 当前选中的箭头
     arrowDelBtn: null,   // 删除按钮 (SVG group)
@@ -217,18 +218,58 @@
     ball.el.setAttribute("transform", `translate(${ball.x},${ball.y})`);
   }
 
+  // ---------- ボール保持 (選手にくっつく) ----------
+  const ATTACH_R = 34;                    // この距離内の選手に付く
+  const ATTACH_OFFSET = { x: 0, y: 24 };  // 足元に置くオフセット
+  function ballOwnerPiece() {
+    return state.ballOwner ? state.pieces.find(function (p) { return p.id === state.ballOwner; }) : null;
+  }
+  function moveBallToOwner() {
+    const o = ballOwnerPiece();
+    if (o && state.ball) setBallPos(state.ball, o.x + ATTACH_OFFSET.x, o.y + ATTACH_OFFSET.y);
+  }
+  function attachBallTo(piece) {
+    detachBall();
+    state.ballOwner = piece.id;
+    piece.el.classList.add("has-ball");
+    moveBallToOwner();
+  }
+  function detachBall() {
+    const o = ballOwnerPiece();
+    if (o) o.el.classList.remove("has-ball");
+    state.ballOwner = null;
+  }
+  function nearestPieceTo(x, y, maxD) {
+    let best = null, bestD = maxD;
+    state.pieces.forEach(function (p) {
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < bestD) { bestD = d; best = p; }
+    });
+    return best;
+  }
+
   // ---------- 拖动 ----------
   function attachDrag(node, obj) {
     let dragging = false;
     let offset = { x: 0, y: 0 };
+    let startPt = { x: 0, y: 0 };
+    let moved = false;
+    let wasAttached = false;
+    const isBall = obj.id === "ball";
 
     function down(e) {
       if (state.mode !== "move" || state.playing) return;
       e.preventDefault();
       dragging = true;
+      moved = false;
       node.classList.add("dragging");
       layers.pieces.appendChild(node); // 提到最上层
       const pt = toSvg(clientX(e), clientY(e));
+      startPt.x = pt.x; startPt.y = pt.y;
+      if (isBall) {
+        wasAttached = !!state.ballOwner;
+        if (wasAttached) detachBall(); // 触ったら一旦保持解除
+      }
       offset.x = pt.x - obj.x;
       offset.y = pt.y - obj.y;
       window.addEventListener("pointermove", move);
@@ -237,15 +278,29 @@
     function move(e) {
       if (!dragging) return;
       const pt = toSvg(clientX(e), clientY(e));
+      if (Math.hypot(pt.x - startPt.x, pt.y - startPt.y) > 5) moved = true;
       const nx = pt.x - offset.x, ny = pt.y - offset.y;
-      if (obj.id === "ball") setBallPos(obj, nx, ny);
-      else setPiecePos(obj, nx, ny);
+      if (isBall) {
+        setBallPos(obj, nx, ny);
+      } else {
+        setPiecePos(obj, nx, ny);
+        if (state.ballOwner === obj.id) moveBallToOwner(); // 保持中はボールも追従
+      }
     }
     function up() {
       dragging = false;
       node.classList.remove("dragging");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      if (isBall) {
+        if (!moved && wasAttached) {
+          // タップ = 保持解除 (その場に残す)
+        } else {
+          // ドラッグ後: 近くに選手がいれば保持させる
+          const p = nearestPieceTo(obj.x, obj.y, ATTACH_R);
+          if (p) attachBallTo(p);
+        }
+      }
     }
     node.addEventListener("pointerdown", down);
   }
@@ -360,6 +415,7 @@
       const target = pos[i] || { x: W / 2, y: isHome ? H - 120 : 120 };
       setPiecePos(p, target.x, target.y);
     });
+    if (state.ballOwner) moveBallToOwner(); // 保持中ならボールも追従
   }
 
   // ---------- 初始化棋子 ----------
@@ -683,6 +739,7 @@
 
     document.getElementById("clearArrows").onclick = clearArrows;
     document.getElementById("resetBtn").onclick = function () {
+      detachBall();
       applyFormation("home", selH.value);
       applyFormation("away", selA.value);
       setBallPos(state.ball, W / 2, H / 2);

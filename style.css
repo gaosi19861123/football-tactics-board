@@ -200,6 +200,7 @@ html, body {
 .piece:active { cursor: grabbing; }
 .piece .halo { opacity: 0; transition: opacity .15s ease; }
 .piece.dragging .halo { opacity: 1; }
+.piece.has-ball .halo { opacity: 1; stroke: #f4f4f4; stroke-width: 3; }
 .piece-label { font-size: 22px; font-weight: 700; fill: #fff; pointer-events: none; }
 .piece-num { font-size: 20px; font-weight: 700; pointer-events: none; }
 
