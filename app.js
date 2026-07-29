@@ -147,16 +147,17 @@
     const gkY = isHome ? H - 70 : 70;
     positions.push({ x: W / 2, y: gkY, gk: true });
 
-    // 外场行:我方占下半场 (y 大),从靠近本方球门到中线
-    // 归一化 t: 0=靠己方球门, 1=靠中线
+    // 外场行:我方占下半场 (y 大)。t=0=最终线(PK区线附近), t=1=前锋(中线附近)
+    // PK区线: home = H-150 (=900), away = 150 (与 drawPitch 的大禁区一致)
+    const BOX_LINE = 150; // pad(30)+boxH(120)
     const nRows = rows.length;
     rows.forEach(function (count, i) {
       const t = nRows === 1 ? 0.5 : i / (nRows - 1); // 0..1
       let y;
       if (isHome) {
-        y = (H * 0.90) - t * (H * 0.36); // 0.90H -> 0.54H
+        y = (H - BOX_LINE) - t * ((H - BOX_LINE) - H * 0.54); // 900 -> 567
       } else {
-        y = (H * 0.10) + t * (H * 0.36); // 0.10H -> 0.46H
+        y = BOX_LINE + t * (H * 0.46 - BOX_LINE); // 150 -> 483
       }
       for (let j = 0; j < count; j++) {
         const fx = count === 1 ? 0.5 : (j + 0.5) / count;
