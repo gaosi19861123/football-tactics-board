@@ -466,31 +466,61 @@
   }
 
   // ---- 播放控制 ----
+  // 再生時間は「移動距離 ÷ 子供の走速度」で決める(区間ごとに可変)
+  function childSpeedMps() { return parseFloat(document.getElementById("speed").value) || 2.5; }
+  function segDurationMs(seg, speedMps) {
+    const from = state.frames[seg], to = state.frames[seg + 1];
+    let maxDist = 0; // その区間で最も長く動く選手の距離(SVG単位)
+    state.pieces.forEach(function (p) {
+      const a = from.positions[p.id], b = to.positions[p.id];
+      if (a && b) { const d = Math.hypot(b.x - a.x, b.y - a.y); if (d > maxDist) maxDist = d; }
+    });
+    const meters = maxDist * FPV.S; // FPV.S=0.055 (8人制の実寸スケール)
+    return Math.max(400, (meters / speedMps) * 1000); // 最低0.4秒
+  }
   function play() {
     if (state.frames.length < 2) return;
     if (state.playing) { pause(); return; }
     state.playing = true;
     // 到末尾了就从头开始
-    state.playStartPos = state.playPos >= state.frames.length - 1 ? 0 : state.playPos;
-    state.playStartTime = performance.now();
+    if (state.playPos >= state.frames.length - 1) { state.playPos = 0; seek(0, false); }
+    state.playPrevTime = performance.now();
     syncSimUI();
     state.rafId = requestAnimationFrame(playStep);
   }
   function playStep(now) {
     if (!state.playing) return;
-    const speed = parseInt(document.getElementById("speed").value, 10);
+    let dt = now - state.playPrevTime;
+    state.playPrevTime = now;
+    if (dt < 0) dt = 0;
+    const speed = childSpeedMps();
     const maxPos = state.frames.length - 1;
-    let pos = state.playStartPos + (now - state.playStartTime) / speed;
-    if (pos >= maxPos) {
-      if (state.loop) {
-        state.playStartPos = 0;
-        state.playStartTime = now;
-        pos = 0;
+    let pos = state.playPos;
+    let remaining = dt; // 消化すべき残り時間(ms)
+    while (remaining > 0 && pos < maxPos) {
+      const seg = Math.min(Math.floor(pos + 1e-9), maxPos - 1);
+      const local = pos - seg;
+      const dur = segDurationMs(seg, speed);
+      const remLocalMs = (1 - local) * dur; // この区間の残り時間
+      if (remaining < remLocalMs) {
+        pos = seg + local + remaining / dur;
+        remaining = 0;
       } else {
-        seek(maxPos, true);
-        pause();
-        return;
+        remaining -= remLocalMs;
+        pos = seg + 1;
       }
+    }
+    if (pos >= maxPos) {
+      seek(maxPos, true);
+      if (state.loop) {
+        state.playPos = 0;
+        seek(0, true);
+        state.playPrevTime = now;
+        state.rafId = requestAnimationFrame(playStep);
+      } else {
+        pause();
+      }
+      return;
     }
     seek(pos, true);
     state.rafId = requestAnimationFrame(playStep);
@@ -683,13 +713,15 @@
       renderFrameList();
     };
 
-    // 播放中调节速度时,重设时间基准避免跳变
-    document.getElementById("speed").oninput = function () {
-      if (state.playing) {
-        state.playStartPos = state.playPos;
-        state.playStartTime = performance.now();
-      }
-    };
+    // 速度スライダー = 子供の走速度 (m/s)。再生中もそのまま滑らかに反映される
+    document.getElementById("speed").oninput = updateSpeedLabel;
+    updateSpeedLabel();
+  }
+
+  function updateSpeedLabel() {
+    const v = document.getElementById("speed").value;
+    const el = document.getElementById("speedVal");
+    if (el) el.textContent = v + " m/s";
   }
 
   function setMode(mode) {
