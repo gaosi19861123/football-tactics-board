@@ -271,10 +271,21 @@ html, body {
 .piece.is-camera .halo { opacity: 1; stroke: #ffd166; stroke-width: 4; }
 
 /* ---------- Responsive ---------- */
+/* タブレット横幅: サイドバーを2カラム風に */
 @media (max-width: 820px) {
-  .stage { flex-direction: column; }
-  .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; }
+  html, body { height: auto; }
+  #app { height: auto; min-height: 100vh; }
+  .stage { flex-direction: column; height: auto; min-height: 0; }
+  .pitch-wrap { flex: none; width: 100%; min-height: 0; max-height: none; }
+  #pitch { width: 100%; height: auto; max-height: none; }
+  .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; overflow: visible; }
   .sidebar .panel { flex: 1; min-width: 240px; }
-  #pitch { width: 100%; height: auto; }
-  .pitch-wrap { max-height: 60vh; }
+}
+
+/* スマホ縦: 1カラム + ページ全体スクロール */
+@media (max-width: 560px) {
+  .sidebar { flex-direction: column; }
+  .sidebar .panel { flex: none; min-width: 0; }
+  .topbar { gap: 10px; }
+  .toolbar { gap: 8px; }
 }
