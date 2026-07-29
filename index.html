@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>サッカー戦術ボード · 8人制</title>
+<link rel="stylesheet" href="style.css?v=9" />
+</head>
+<body>
+<div id="loginOverlay" class="login-overlay">
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <div class="login-logo">⚽</div>
+    <h1 class="login-title">サッカー戦術ボード</h1>
+    <p class="login-sub">ログインしてください</p>
+    <label class="login-field">ユーザー名
+      <input type="text" id="loginUser" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
+    </label>
+    <label class="login-field">パスワード
+      <input type="password" id="loginPass" autocomplete="current-password" />
+    </label>
+    <p id="loginError" class="login-error" hidden>ユーザー名またはパスワードが違います</p>
+    <button type="submit" class="btn primary login-btn">ログイン</button>
+  </form>
+</div>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⚽</span>
+      <div class="titles">
+        <h1>サッカー戦術ボード</h1>
+        <p>小学生 8人制 · 戦術シミュレーション</p>
+      </div>
+    </div>
+    <div class="toolbar">
+      <div class="tool-group">
+        <label class="tool-label">フォーメーション(自)</label>
+        <select id="formationHome" class="select"></select>
+      </div>
+      <div class="tool-group">
+        <label class="tool-label">フォーメーション(相手)</label>
+        <select id="formationAway" class="select"></select>
+      </div>
+      <button id="modeMove" class="btn active" data-mode="move" title="コマを動かす">✋ 移動</button>
+      <button id="modeDraw" class="btn" data-mode="draw" title="動きの矢印を描く">➡️ ライン</button>
+      <button id="clearArrows" class="btn ghost" title="矢印を消す">🧹 矢印消去</button>
+      <button id="resetBtn" class="btn ghost" title="初期フォーメーションに戻す">↺ リセット</button>
+      <button id="logoutBtn" class="btn ghost" title="ログアウト">🔓 ログアウト</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="pitch-wrap" id="pitchWrap">
+      <svg id="pitch" viewBox="0 0 680 1050" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>選手視点(一人称)</h2>
+        <select id="fpvSelect" class="select fpv-select"></select>
+        <canvas id="fpvCanvas" class="fpv-canvas"></canvas>
+        <div class="fpv-controls">
+          <button id="fpvLeft" class="btn small" title="左を向く">↶ 左</button>
+          <button id="fpvReset" class="btn small" title="正面(相手ゴール方向)">正面</button>
+          <button id="fpvRight" class="btn small" title="右を向く">右 ↷</button>
+        </div>
+        <input type="range" id="fpvYaw" class="fpv-yaw" min="0" max="360" value="0" />
+        <p class="hint">選手を選ぶと、その選手の目線で全員の立ち位置が見えます。画面をドラッグ、またはスライダー/ボタンで視線の向きを変えられます。再生中もカメラが追従します。</p>
+      </section>
+
+      <section class="panel">
+        <h2>戦術シミュレーション</h2>
+        <p class="hint" id="simHint">コマを並べて「＋ フレーム追加」。2つ以上でアニメーション再生できます。</p>
+
+        <div class="sim-controls">
+          <button id="captureBtn" class="btn primary">＋ フレーム追加</button>
+          <button id="updateBtn" class="btn" title="現在の配置でこのフレームを上書き" disabled>⟳ 更新</button>
+        </div>
+
+        <div class="transport">
+          <button id="firstBtn" class="tbtn" title="最初へ">⏮</button>
+          <button id="prevBtn" class="tbtn" title="前のフレーム">◁</button>
+          <button id="playBtn" class="tbtn play" title="再生 / 一時停止">▶</button>
+          <button id="nextBtn" class="tbtn" title="次のフレーム">▷</button>
+          <button id="lastBtn" class="tbtn" title="最後へ">⏭</button>
+          <button id="loopBtn" class="tbtn" title="ループ再生">🔁</button>
+          <button id="trailsBtn" class="tbtn" title="動きの軌跡を表示">🐾</button>
+        </div>
+
+        <input type="range" id="timeline" class="timeline" min="0" max="1000" value="0" disabled />
+        <div class="time-label"><span id="curFrameLabel">フレームなし</span></div>
+
+        <div class="speed-row">
+          <label for="speed">速度</label>
+          <input type="range" id="speed" min="400" max="2500" value="1100" step="100" />
+        </div>
+
+        <ol id="frameList" class="frame-list"></ol>
+        <button id="clearFramesBtn" class="btn ghost full">✕ 全フレーム消去</button>
+      </section>
+
+      <section class="panel">
+        <h2>説明</h2>
+        <ul class="legend">
+          <li><span class="dot home"></span> 自チーム(フィールド7名＋GK)</li>
+          <li><span class="dot away"></span> 相手チーム</li>
+          <li><span class="dot ball"></span> ボール</li>
+        </ul>
+        <p class="hint">マウスでドラッグできます。タブレット/スマホは指でコマを直接動かせます。</p>
+        <p class="hint">「移動」モードで矢印をクリックすると、削除ボタン(×)が出て1本ずつ消せます。</p>
+      </section>
+    </aside>
+  </main>
+</div>
+<script src="app.js?v=9"></script>
+</body>
+</html>
