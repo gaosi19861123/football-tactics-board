@@ -774,6 +774,10 @@
     });
     sel.onchange = function () { setFpvPlayer(sel.value); };
 
+    // 既定は自チームのGK(home1)の視点
+    sel.value = "home1";
+    setFpvPlayer("home1");
+
     document.getElementById("fpvLeft").onclick = function () { nudgeYaw(-20); };
     document.getElementById("fpvRight").onclick = function () { nudgeYaw(20); };
     document.getElementById("fpvReset").onclick = function () { faceDefault(); };
