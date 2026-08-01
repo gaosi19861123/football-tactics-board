@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>サッカー戦術ボード · 8人制</title>
-<link rel="stylesheet" href="style.css?v=16" />
+<link rel="stylesheet" href="style.css?v=17" />
 </head>
 <body>
 <div id="loginOverlay" class="login-overlay">
@@ -73,6 +73,7 @@
         <!-- 開始画面 -->
         <div id="gameSetup">
           <p class="hint">一人称視点だけを制限時間内に見て、みんなの位置を盤面で再現します。首を振って(ドラッグ/スライダー)覚えましょう。</p>
+          <p class="hint">出題は実際の試合の場面（ビルドアップ・中盤の攻防・崩し・サイド攻撃・カウンター）から作られます。</p>
 
           <label class="game-label">難易度</label>
           <div class="game-diffs" id="gameDiffs">
@@ -100,7 +101,7 @@
 
           <div class="game-best" id="gameBest"></div>
 
-          <button id="gameStartRandom" class="btn primary full">▶ ランダム出題でスタート</button>
+          <button id="gameStartRandom" class="btn primary full">▶ 試合の場面で出題</button>
           <button id="gameStartCurrent" class="btn full">今の配置で出題</button>
         </div>
 
@@ -190,6 +191,6 @@
   <p class="go-hint">画面をドラッグ、またはボタン/スライダーで見回して、全員の位置を覚えてください。</p>
   <button id="goAbort" class="btn ghost go-abort">中止</button>
 </div>
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

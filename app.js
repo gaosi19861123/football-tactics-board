@@ -1166,24 +1166,145 @@
       : "ベスト: " + cond + " — <b>" + b + " 点</b>";
   }
 
-  // ---- 出題 ----
-  function randomScene() {
-    const names = Object.keys(FORMATIONS);
-    const hn = names[Math.floor(Math.random() * names.length)];
-    const an = names[Math.floor(Math.random() * names.length)];
-    detachBall();
-    gameEl("formationHome").value = hn;
-    gameEl("formationAway").value = an;
-    applyFormation("home", hn);
-    applyFormation("away", an);
-    // 各選手を少し散らす(GKは控えめ)
-    state.pieces.forEach(function (p) {
-      const j = p.num === 1 ? 20 : 35;
-      setPiecePos(p, clamp(p.x + (Math.random() * 2 - 1) * j, 45, W - 45), clamp(p.y + (Math.random() * 2 - 1) * j, 45, H - 45));
+  // ---- 出題: 実際の試合の攻防シーンを作る ----
+  // 単に両チームの陣型を並べるのではなく、「ボールがどこにあるか」を起点に
+  // 攻撃側は押し上げて幅を取り、守備側はボールとゴールの間に圧縮する、という
+  // 実際のサッカーの原則どおりに配置する。
+  const MET = 1 / FPV.S;                                  // 1メートル ≒ 18.2 SVG単位
+  const FIELD = { x0: 45, x1: W - 45, y0: 45, y1: H - 45 };
+
+  const SCENES = [
+    // ballDepth = 攻撃側の自ゴール(0)から相手ゴール(1)まで
+    { key: "buildup",  label: "自陣からのビルドアップ", depth: [0.16, 0.30], fx: [0.18, 0.82] },
+    { key: "midfield", label: "中盤での攻防",           depth: [0.42, 0.58], fx: [0.18, 0.82] },
+    { key: "attack",   label: "相手陣での崩し",         depth: [0.66, 0.80], fx: [0.28, 0.72] },
+    { key: "wing",     label: "サイド攻撃・クロス",     depth: [0.72, 0.88], fx: [0.06, 0.18], side: true },
+    { key: "counter",  label: "カウンター",             depth: [0.48, 0.64], fx: [0.25, 0.75], stretch: true },
+  ];
+  const DEF_SHAPES = [[3, 3, 1], [3, 2, 2], [2, 3, 2], [3, 3, 1]];
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function pickOne(a) { return a[Math.floor(Math.random() * a.length)]; }
+  function teamPieces(team) {
+    return state.pieces.filter(function (p) { return p.team === team; })
+      .sort(function (a, b) { return a.num - b.num; });
+  }
+  // 深さ d(0=自ゴール, 1=相手ゴール) と横位置 fx(0=左, 1=右) → SVG座標
+  function depthPt(team, d, fx) {
+    const ownY = team === "home" ? FIELD.y1 : FIELD.y0;
+    const oppY = team === "home" ? FIELD.y0 : FIELD.y1;
+    return { x: FIELD.x0 + clamp(fx, 0, 1) * (FIELD.x1 - FIELD.x0), y: ownY + clamp(d, 0, 1) * (oppY - ownY) };
+  }
+  function putAt(p, pt, noiseM) {
+    const n = (noiseM || 0) * MET;
+    setPiecePos(p, clamp(pt.x + rnd(-n, n), FIELD.x0, FIELD.x1), clamp(pt.y + rnd(-n, n), FIELD.y0, FIELD.y1));
+  }
+  function nearestOf(list, pt) {
+    let best = list[0], bd = Infinity;
+    list.forEach(function (p) {
+      const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+      if (d < bd) { bd = d; best = p; }
     });
-    // ボールは誰かの近くに
-    const holder = state.pieces[Math.floor(Math.random() * state.pieces.length)];
-    setBallPos(state.ball, clamp(holder.x + (Math.random() * 2 - 1) * 40, 45, W - 45), clamp(holder.y + (Math.random() * 2 - 1) * 40, 45, H - 45));
+    return best;
+  }
+
+  function realisticScene() {
+    detachBall();
+    const atk = Math.random() < 0.5 ? "home" : "away";
+    const def = atk === "home" ? "away" : "home";
+    const sc = pickOne(SCENES);
+
+    const bd = rnd(sc.depth[0], sc.depth[1]);              // ボールの深さ(攻撃側基準)
+    let bfx = rnd(sc.fx[0], sc.fx[1]);
+    if (sc.side && Math.random() < 0.5) bfx = 1 - bfx;     // 左右どちらのサイドか
+    const ball = depthPt(atk, bd, bfx);
+
+    // 先に守備の最終ラインを決める。攻撃側はこれを越えない(＝オフサイドにならない)ように置く
+    const defBack = clamp((1 - bd) - 0.16, 0.07, 0.58);
+    const offside = 1 - defBack;
+
+    placeAttackers(atk, bd, bfx, sc, ball, offside);
+    placeDefenders(def, 1 - bd, bfx, sc, ball, defBack);
+    separatePieces(46, 4);                                  // 重なりをほどく(約2.5m)
+    setBallPos(state.ball, ball.x, ball.y);
+
+    state.game.sceneLabel = sc.label;
+    state.game.sceneAtk = atk;
+  }
+
+  // 攻撃側: ボールを中心に前後へ展開し、幅を大きく取る
+  function placeAttackers(team, bd, bfx, sc, ball, offside) {
+    const rows = FORMATIONS[pickOne(Object.keys(FORMATIONS))];
+    const ps = teamPieces(team);
+
+    // GKは押し上げる(ボールが前にあるほど高い位置=スイーパー気味)
+    putAt(ps[0], depthPt(team, clamp(0.05 + bd * 0.13, 0.05, 0.20), 0.5 + (bfx - 0.5) * 0.35), 0.5);
+
+    const spread = sc.stretch ? 0.32 : 0.24;               // カウンターは間延びする
+    let i = 1;
+    rows.forEach(function (count, r) {
+      const t = rows.length === 1 ? 0.5 : r / (rows.length - 1);   // 0=最後尾 1=前線
+      // 前線は相手の最終ラインの少し手前まで(オフサイドポジションに立たない)
+      const d = clamp(Math.min(bd - spread + t * spread * 2, offside - 0.015), 0.08, 0.95);
+      for (let j = 0; j < count; j++) {
+        // 幅いっぱいに広がり、ボール側へ少しだけ寄る
+        const w = count === 1 ? 0.5 : 0.12 + j * (0.76 / (count - 1));
+        putAt(ps[i++], depthPt(team, d, w + (bfx - 0.5) * 0.15), 1.1);
+      }
+    });
+
+    // ボール保持者をボールの足元へ
+    const carrier = nearestOf(ps.slice(1), ball);
+    setPiecePos(carrier, ball.x + rnd(-0.7, 0.7) * MET, ball.y + rnd(-0.7, 0.7) * MET);
+  }
+
+  // 守備側: ボールとゴールの間に、縦にも横にもコンパクトなブロックを作る
+  function placeDefenders(team, bd, bfx, sc, ball, back) {
+    const ps = teamPieces(team);
+
+    // GKはゴール前でボールの角度に合わせて横にずれる
+    putAt(ps[0], depthPt(team, clamp(0.03 + bd * 0.06, 0.03, 0.10), 0.5 + (bfx - 0.5) * 0.45), 0.35);
+
+    const gapV = sc.stretch ? 0.15 : 0.10;                 // ライン間の距離(縦のコンパクトさ)
+    const width = sc.stretch ? 0.62 : 0.46;                // ブロックの幅(横のコンパクトさ)
+    const center = clamp(0.5 + (bfx - 0.5) * 0.75, 0.2, 0.8); // ボール側へスライド
+    const rows = pickOne(DEF_SHAPES);
+
+    let i = 1;
+    rows.forEach(function (count, r) {
+      const front = r === rows.length - 1 ? 0.06 : 0;      // 前線は少し高い位置で構える
+      const d = clamp(back + r * gapV + front, 0.05, 0.92);
+      for (let j = 0; j < count; j++) {
+        const w = count === 1 ? center : center - width / 2 + j * (width / (count - 1));
+        putAt(ps[i++], depthPt(team, d, w), 1.0);
+      }
+    });
+
+    // 一番近い選手がボールにプレスをかける(ボールと自ゴールを結ぶ線上)
+    const presser = nearestOf(ps.slice(1), ball);
+    const goal = depthPt(team, 0, 0.5);
+    const vx = goal.x - ball.x, vy = goal.y - ball.y;
+    const L = Math.hypot(vx, vy) || 1;
+    const dist = rnd(1.2, 2.6) * MET;
+    setPiecePos(presser, ball.x + (vx / L) * dist, ball.y + (vy / L) * dist);
+  }
+
+  // 駒同士が重ならないように軽く押し広げる
+  function separatePieces(minD, iters) {
+    for (let k = 0; k < iters; k++) {
+      for (let i = 0; i < state.pieces.length; i++) {
+        for (let j = i + 1; j < state.pieces.length; j++) {
+          const a = state.pieces[i], b = state.pieces[j];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const d = Math.hypot(dx, dy);
+          if (d < minD && d > 0.01) {
+            const push = (minD - d) / 2, ux = dx / d, uy = dy / d;
+            setPiecePos(a, clamp(a.x - ux * push, FIELD.x0, FIELD.x1), clamp(a.y - uy * push, FIELD.y0, FIELD.y1));
+            setPiecePos(b, clamp(b.x + ux * push, FIELD.x0, FIELD.x1), clamp(b.y + uy * push, FIELD.y0, FIELD.y1));
+          }
+        }
+      }
+    }
   }
 
   function resolveCamId() {
@@ -1210,8 +1331,13 @@
     pause();
     hideArrowDelete();
     setMode("move");
-    if (!useCurrent) randomScene();
-    else detachBall();
+    if (!useCurrent) {
+      realisticScene();
+    } else {
+      detachBall();
+      g.sceneLabel = "今の配置";
+      g.sceneAtk = null;
+    }
 
     g.camId = resolveCamId();
     g.truth = snapshot();       // これが正解
@@ -1485,7 +1611,10 @@
     rk.textContent = rank;
     rk.className = "score-rank r-" + rank;
     gameEl("scoreValue").textContent = score;
+    const g = state.game;
+    const who = g.sceneAtk ? "（" + (g.sceneAtk === "home" ? "自チーム" : "相手") + "の攻撃）" : "";
     gameEl("scoreSub").innerHTML =
+      (g.sceneLabel ? "シーン: " + g.sceneLabel + who + "<br>" : "") +
       "平均誤差 " + avgErr.toFixed(1) + " m ・ " + GAME_DIFF_LABEL[state.game.difficulty] +
       "(" + GAME_TIMES[state.game.difficulty] + "秒) ・ " + GAME_SCOPE_LABEL[state.game.scope] +
       "<br>採点: " + (state.game.match === "pos" ? "位置だけ(背番号は不問)" : "背番号も一致") +
