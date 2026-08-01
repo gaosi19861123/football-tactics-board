@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>サッカー戦術ボード · 8人制</title>
-<link rel="stylesheet" href="style.css?v=14" />
+<link rel="stylesheet" href="style.css?v=15" />
 </head>
 <body>
 <div id="loginOverlay" class="login-overlay">
@@ -67,6 +67,60 @@
         <p class="hint">選手を選ぶと、その選手の目線で全員の立ち位置が見えます。画面をドラッグ、またはスライダー/ボタンで視線の向きを変えられます。再生中もカメラが追従します。</p>
       </section>
 
+      <section class="panel" id="gamePanel">
+        <h2>🎯 記憶ゲーム</h2>
+
+        <!-- 開始画面 -->
+        <div id="gameSetup">
+          <p class="hint">一人称視点だけを制限時間内に見て、みんなの位置を盤面で再現します。首を振って(ドラッグ/スライダー)覚えましょう。</p>
+
+          <label class="game-label">難易度</label>
+          <div class="game-diffs" id="gameDiffs">
+            <button class="dbtn" data-diff="easy">簡単<span>10秒</span></button>
+            <button class="dbtn active" data-diff="normal">普通<span>8秒</span></button>
+            <button class="dbtn" data-diff="hard">難しい<span>5秒</span></button>
+            <button class="dbtn" data-diff="hell">地獄<span>3秒</span></button>
+          </div>
+
+          <label class="game-label" for="gameScope">復元する対象</label>
+          <select id="gameScope" class="select full">
+            <option value="away">相手チームのみ (8人)</option>
+            <option value="all" selected>全員 (15人)</option>
+            <option value="allball">全員 + ボール (16個)</option>
+          </select>
+
+          <label class="game-label" for="gameCam">視点の選手</label>
+          <select id="gameCam" class="select full"></select>
+
+          <div class="game-best" id="gameBest"></div>
+
+          <button id="gameStartRandom" class="btn primary full">▶ ランダム出題でスタート</button>
+          <button id="gameStartCurrent" class="btn full">今の配置で出題</button>
+        </div>
+
+        <!-- 回答中 -->
+        <div id="gameAnswer" hidden>
+          <div class="game-progress"><span id="gamePlacedLabel">配置 0 / 0</span></div>
+          <p class="hint">盤面をタップすると「次の駒」が置かれます。置いた駒はドラッグで微調整できます。</p>
+          <div class="game-chips" id="gameChips"></div>
+          <button id="gameSubmit" class="btn primary full">✓ 答え合わせ</button>
+          <button id="gameQuit" class="btn ghost full">中止</button>
+        </div>
+
+        <!-- 結果 -->
+        <div id="gameResult" hidden>
+          <div class="score-box">
+            <div class="score-rank" id="scoreRank">A</div>
+            <div class="score-main"><span id="scoreValue">0</span><small>点</small></div>
+            <div class="score-sub" id="scoreSub"></div>
+          </div>
+          <ol class="err-list" id="errList"></ol>
+          <button id="gameShowTruth" class="btn full">👁 正解の配置を見る</button>
+          <button id="gameAgain" class="btn primary full">↻ もう一度</button>
+          <button id="gameExit" class="btn ghost full">終了</button>
+        </div>
+      </section>
+
       <section class="panel">
         <h2>戦術シミュレーション</h2>
         <p class="hint" id="simHint">コマを並べて「＋ フレーム追加」。2つ以上でアニメーション再生できます。</p>
@@ -108,10 +162,27 @@
         </ul>
         <p class="hint">マウスでドラッグできます。タブレット/スマホは指でコマを直接動かせます。</p>
         <p class="hint">「移動」モードで矢印をクリックすると、削除ボタン(×)が出て1本ずつ消せます。</p>
+        <p class="hint">🎯 記憶ゲーム: 一人称視点を制限時間内(10/8/5/3秒)だけ見て、全員の位置を盤面で再現します。誤差(m)から採点され、0〜100点とランク(S〜D)が出ます。首を振って周りを把握する練習になります。</p>
       </section>
     </aside>
   </main>
 </div>
-<script src="app.js?v=14"></script>
+<div id="gameOverlay" class="game-overlay" hidden>
+  <div class="go-head">
+    <div class="go-who" id="goWho">視点</div>
+    <div class="go-time"><span id="goTime">8.0</span><small>秒</small></div>
+  </div>
+  <div class="go-bar"><div class="go-bar-fill" id="goBarFill"></div></div>
+  <canvas id="gameCanvas" class="go-canvas"></canvas>
+  <div class="go-controls">
+    <button id="goLeft" class="btn">↶ 左</button>
+    <button id="goReset" class="btn">正面</button>
+    <button id="goRight" class="btn">右 ↷</button>
+  </div>
+  <input type="range" id="goYaw" class="fpv-yaw" min="0" max="360" value="0" />
+  <p class="go-hint">画面をドラッグ、またはボタン/スライダーで見回して、全員の位置を覚えてください。</p>
+  <button id="goAbort" class="btn ghost go-abort">中止</button>
+</div>
+<script src="app.js?v=15"></script>
 </body>
 </html>

@@ -42,7 +42,28 @@
     loop: false,
     showTrails: false,
     fpv: { active: false, playerId: null, yaw: 0, pitch: -6 }, // 一人称视点
+    // 記憶ゲーム
+    game: {
+      phase: "idle",     // idle | observe | answer | result
+      difficulty: "normal",
+      scope: "all",      // away | all | allball
+      camId: null,       // 視点選手 (答えフェーズでも盤上に残る基準点)
+      truth: null,       // 出題時の配置 (正解)
+      before: null,      // ゲーム開始前の盤面 (終了時に復元)
+      beforeOwner: null,
+      beforeFpv: null,
+      targets: [],       // [{id, isBall, obj, trayX, trayY, placed}]
+      nextIdx: 0,
+      tEnd: 0,
+      rafId: 0,
+      timerId: 0,
+    },
   };
+
+  // 難易度 = 観察できる秒数
+  const GAME_TIMES = { easy: 10, normal: 8, hard: 5, hell: 3 };
+  const GAME_DIFF_LABEL = { easy: "簡単", normal: "普通", hard: "難しい", hell: "地獄" };
+  const GAME_SCOPE_LABEL = { away: "相手のみ", all: "全員", allball: "全員+ボール" };
 
   // ---------- 工具 ----------
   function el(tag, attrs) {
@@ -259,6 +280,11 @@
 
     function down(e) {
       if (state.mode !== "move" || state.playing) return;
+      // ゲーム中: 観察/結果フェーズは動かせない。答えフェーズは出題対象の駒だけ動かせる
+      // (視点選手や対象外の駒は基準点として正解位置に固定)
+      const ph = state.game.phase;
+      if (ph === "observe" || ph === "result") return;
+      if (ph === "answer" && !isGameTarget(obj.id)) return;
       e.preventDefault();
       dragging = true;
       moved = false;
@@ -292,6 +318,10 @@
       node.classList.remove("dragging");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      if (state.game.phase === "answer") {
+        if (moved) markPlaced(obj.id); // 実際に動かしたら「配置済み」
+        return;                        // ゲーム回答中はボールを選手にくっつけない
+      }
       if (isBall) {
         if (!moved && wasAttached) {
           // タップ = 保持解除 (その場に残す)
@@ -667,7 +697,8 @@
   // 播放条 / 按钮 / 提示 的状态同步
   function syncSimUI() {
     const n = state.frames.length;
-    const has2 = n >= 2;
+    const locked = state.game.phase !== "idle"; // 記憶ゲーム中は操作させない
+    const has2 = n >= 2 && !locked;
     const timeline = document.getElementById("timeline");
     const playBtn = document.getElementById("playBtn");
     const label = document.getElementById("curFrameLabel");
@@ -679,11 +710,12 @@
     ["firstBtn", "prevBtn", "playBtn", "nextBtn", "lastBtn", "timeline"].forEach(function (id) {
       document.getElementById(id).disabled = !has2;
     });
-    document.getElementById("updateBtn").disabled = n === 0;
-    document.getElementById("clearFramesBtn").disabled = n === 0;
+    document.getElementById("updateBtn").disabled = n === 0 || locked;
+    document.getElementById("clearFramesBtn").disabled = n === 0 || locked;
+    document.getElementById("captureBtn").disabled = locked;
 
     // 进度条
-    if (has2) {
+    if (n >= 2) {
       timeline.value = Math.round((state.playPos / (n - 1)) * 1000);
     } else {
       timeline.value = 0;
@@ -794,6 +826,7 @@
   // EYE/PLAYER_H は小学生向けの身長。BALL_R は視認性のため実寸(約0.11m)より誇張。
   const FPV = { S: 0.055, EYE: 1.35, FOV: 80 * Math.PI / 180, NEAR: 0.25, PLAYER_H: 1.45, BALL_R: 0.22 };
   let fpvCanvas, fpvCtx, fpvCssW = 250, fpvCssH = 180;
+  let gameCanvas, gameCtx, gameCssW = 640, gameCssH = 360;
 
   // 球场线段 (SVG 坐标, 地面 h=0)
   const FPV_LINES = (function () {
@@ -824,7 +857,10 @@
     return team + " " + num + (num === "1" ? " (GK)" : "");
   }
   function getFpvCam() { return state.pieces.find(function (p) { return p.id === state.fpv.playerId; }) || null; }
-  function syncYawSlider() { const s = document.getElementById("fpvYaw"); if (s) s.value = Math.round(state.fpv.yaw); }
+  function syncYawSlider() {
+    const v = Math.round(state.fpv.yaw);
+    ["fpvYaw", "goYaw"].forEach(function (id) { const s = document.getElementById(id); if (s) s.value = v; });
+  }
   function nudgeYaw(d) { state.fpv.yaw = (state.fpv.yaw + d + 360) % 360; syncYawSlider(); }
   function faceDefault() {
     const cam = getFpvCam();
@@ -838,6 +874,26 @@
     state.pieces.forEach(function (p) { p.el.classList.toggle("is-camera", p.id === id); });
     if (state.fpv.active) faceDefault();
     else if (layers.fpvCone) layers.fpvCone.innerHTML = "";
+  }
+
+  // 画面をドラッグして見回す (サイドバー / ゲーム両方のキャンバスで使う)
+  function attachLookDrag(canvas) {
+    let dragging = false, lastX = 0, lastY = 0;
+    canvas.addEventListener("pointerdown", function (e) {
+      if (!state.fpv.active) return;
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      state.fpv.yaw = (state.fpv.yaw + dx * 0.4 + 360) % 360;
+      state.fpv.pitch = clamp(state.fpv.pitch - dy * 0.3, -35, 20);
+      syncYawSlider();
+    });
+    canvas.addEventListener("pointerup", function () { dragging = false; });
+    canvas.addEventListener("pointercancel", function () { dragging = false; });
   }
 
   function sizeFPV() {
@@ -874,46 +930,55 @@
     const yawSlider = document.getElementById("fpvYaw");
     yawSlider.oninput = function () { state.fpv.yaw = parseFloat(yawSlider.value); };
 
-    // 在画面上拖动来环视
-    let dragging = false, lastX = 0, lastY = 0;
-    fpvCanvas.addEventListener("pointerdown", function (e) {
-      if (!state.fpv.active) return;
-      dragging = true; lastX = e.clientX; lastY = e.clientY;
-      fpvCanvas.setPointerCapture(e.pointerId);
-    });
-    fpvCanvas.addEventListener("pointermove", function (e) {
-      if (!dragging) return;
-      const dx = e.clientX - lastX, dy = e.clientY - lastY;
-      lastX = e.clientX; lastY = e.clientY;
-      state.fpv.yaw = (state.fpv.yaw + dx * 0.4 + 360) % 360;
-      state.fpv.pitch = clamp(state.fpv.pitch - dy * 0.3, -35, 20);
-      syncYawSlider();
-    });
-    fpvCanvas.addEventListener("pointerup", function () { dragging = false; });
-    fpvCanvas.addEventListener("pointercancel", function () { dragging = false; });
+    attachLookDrag(fpvCanvas);
 
     sizeFPV();
     window.addEventListener("resize", sizeFPV);
     requestAnimationFrame(fpvFrame);
   }
 
-  function fpvFrame() { renderFPV(); requestAnimationFrame(fpvFrame); }
+  function fpvFrame() {
+    renderFPV();
+    if (state.game.phase === "observe") renderGameView();
+    requestAnimationFrame(fpvFrame);
+  }
 
-  function drawFpvOff(ctx, W, H) {
+  function drawFpvOff(ctx, W, H, msg) {
     ctx.fillStyle = "#0a1a10";
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = "#5a6b7a";
     ctx.font = "13px sans-serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("選手を選ぶと視点が表示されます", W / 2, H / 2);
+    ctx.fillText(msg || "選手を選ぶと視点が表示されます", W / 2, H / 2);
   }
 
   function renderFPV() {
     if (!fpvCtx) return;
-    const ctx = fpvCtx, W = fpvCssW, H = fpvCssH;
     const cam = getFpvCam();
-    if (!state.fpv.active || !cam) { drawFpvOff(ctx, W, H); if (layers.fpvCone) layers.fpvCone.innerHTML = ""; return; }
+    if (!state.fpv.active || !cam) {
+      drawFpvOff(fpvCtx, fpvCssW, fpvCssH);
+      if (layers.fpvCone) layers.fpvCone.innerHTML = "";
+      return;
+    }
+    // 回答中は自分の解答が一人称で見えてしまうと答え合わせにならないので伏せる
+    if (state.game.phase === "answer") {
+      drawFpvOff(fpvCtx, fpvCssW, fpvCssH, "答え合わせのあとに戻ります");
+      if (layers.fpvCone) layers.fpvCone.innerHTML = "";
+      return;
+    }
+    drawFpvScene(fpvCtx, fpvCssW, fpvCssH, cam);
+    updateFpvCone(cam);
+  }
 
+  // 大きなゲーム用キャンバスへの描画 (観察フェーズ)
+  function renderGameView() {
+    if (!gameCtx) return;
+    const cam = state.pieces.find(function (p) { return p.id === state.game.camId; });
+    if (cam) drawFpvScene(gameCtx, gameCssW, gameCssH, cam);
+  }
+
+  // 一人称シーンを任意のキャンバスに描く (サイドバー / ゲーム共用)
+  function drawFpvScene(ctx, W, H, cam) {
     const S = FPV.S;
     const yaw = state.fpv.yaw * Math.PI / 180, pitch = state.fpv.pitch * Math.PI / 180;
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -989,8 +1054,6 @@
     ctx.beginPath(); ctx.arc(22, 20, 6, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.font = "600 13px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
     ctx.fillText(fpvLabel(cam.id) + " の視点", 34, 21);
-
-    updateFpvCone(cam);
   }
 
   function drawSeg(ctx, camPt, project, a1, b1, h1, a2, b2, h2, color, width) {
@@ -1064,6 +1127,449 @@
     layers.fpvCone.appendChild(path);
   }
 
+  // ================= 記憶ゲーム =================
+  // 一人称視点だけを制限時間内に見る → 上からの盤面で全員の位置を再現 → 正解と比較して採点
+
+  const GAME_TRAY = { homeY: 470, awayY: 545, ballY: 620 };
+  // この誤差(m)以上で0点。ピッチは約37×58mなので、
+  // 3m→75点 / 6m→50点 / 9m→25点 くらいの手応えになる
+  const SCORE_MAX_ERR = 12;
+
+  function gameEl(id) { return document.getElementById(id); }
+  function showGameSection(name) {
+    gameEl("gameSetup").hidden = name !== "setup";
+    gameEl("gameAnswer").hidden = name !== "answer";
+    gameEl("gameResult").hidden = name !== "result";
+  }
+
+  // ---- ベストスコア ----
+  function bestKey() { return state.game.difficulty + "_" + state.game.scope; }
+  function loadBests() {
+    try { return JSON.parse(localStorage.getItem("fv_game_best") || "{}"); } catch (e) { return {}; }
+  }
+  function saveBest(score) {
+    const all = loadBests();
+    const k = bestKey();
+    if (!(k in all) || score > all[k]) { all[k] = score; localStorage.setItem("fv_game_best", JSON.stringify(all)); return true; }
+    return false;
+  }
+  function renderBest() {
+    const box = gameEl("gameBest");
+    if (!box) return;
+    const b = loadBests()[bestKey()];
+    const cond = GAME_DIFF_LABEL[state.game.difficulty] + " / " + GAME_SCOPE_LABEL[state.game.scope];
+    box.innerHTML = b === undefined
+      ? "ベスト: " + cond + " — まだ記録なし"
+      : "ベスト: " + cond + " — <b>" + b + " 点</b>";
+  }
+
+  // ---- 出題 ----
+  function randomScene() {
+    const names = Object.keys(FORMATIONS);
+    const hn = names[Math.floor(Math.random() * names.length)];
+    const an = names[Math.floor(Math.random() * names.length)];
+    detachBall();
+    gameEl("formationHome").value = hn;
+    gameEl("formationAway").value = an;
+    applyFormation("home", hn);
+    applyFormation("away", an);
+    // 各選手を少し散らす(GKは控えめ)
+    state.pieces.forEach(function (p) {
+      const j = p.num === 1 ? 20 : 35;
+      setPiecePos(p, clamp(p.x + (Math.random() * 2 - 1) * j, 45, W - 45), clamp(p.y + (Math.random() * 2 - 1) * j, 45, H - 45));
+    });
+    // ボールは誰かの近くに
+    const holder = state.pieces[Math.floor(Math.random() * state.pieces.length)];
+    setBallPos(state.ball, clamp(holder.x + (Math.random() * 2 - 1) * 40, 45, W - 45), clamp(holder.y + (Math.random() * 2 - 1) * 40, 45, H - 45));
+  }
+
+  function resolveCamId() {
+    const v = gameEl("gameCam").value;
+    if (v === "random") {
+      const pool = state.pieces;
+      return pool[Math.floor(Math.random() * pool.length)].id;
+    }
+    return v || "home1";
+  }
+
+  function startGame(useCurrent) {
+    const g = state.game;
+    g.difficulty = document.querySelector("#gameDiffs .dbtn.active").dataset.diff;
+    g.scope = gameEl("gameScope").value;
+
+    // 開始前の盤面を保存 (終了時に元へ戻す)
+    g.before = snapshot();
+    g.beforeOwner = state.ballOwner;
+    g.beforeFpv = state.fpv.playerId;
+    g.beforeForm = { home: gameEl("formationHome").value, away: gameEl("formationAway").value };
+
+    pause();
+    hideArrowDelete();
+    setMode("move");
+    if (!useCurrent) randomScene();
+    else detachBall();
+
+    g.camId = resolveCamId();
+    g.truth = snapshot();       // これが正解
+    g.targets = [];
+    g.nextIdx = 0;
+    layers.gameGhosts.innerHTML = "";
+
+    setGameUiLock(true);
+    beginObserve();
+  }
+
+  // ---- 観察フェーズ ----
+  function beginObserve() {
+    const g = state.game;
+    g.phase = "observe";
+    // 視点をゲームの選手に切り替え、相手ゴール方向を向いてスタート
+    setFpvPlayer(g.camId);
+    gameEl("goWho").textContent = fpvLabel(g.camId) + " の視点 — " + GAME_DIFF_LABEL[g.difficulty];
+    const overlay = gameEl("gameOverlay");
+    overlay.hidden = false;
+    sizeGameCanvas();
+    const secs = GAME_TIMES[g.difficulty];
+    g.tEnd = performance.now() + secs * 1000;
+    // 表示は rAF で滑らかに。ただし rAF はタブが非表示だと止まるので、
+    // フェーズ移行そのものは setTimeout で必ず起こるようにする
+    clearGameTimers();
+    g.timerId = setTimeout(function () {
+      if (state.game.phase === "observe") startAnswerPhase();
+    }, secs * 1000 + 60);
+    observeTick();
+  }
+
+  function clearGameTimers() {
+    const g = state.game;
+    if (g.rafId) { cancelAnimationFrame(g.rafId); g.rafId = 0; }
+    if (g.timerId) { clearTimeout(g.timerId); g.timerId = 0; }
+  }
+
+  function observeTick() {
+    const g = state.game;
+    if (g.phase !== "observe") return;
+    const left = g.tEnd - performance.now();
+    const total = GAME_TIMES[g.difficulty] * 1000;
+    gameEl("goTime").textContent = Math.max(0, left / 1000).toFixed(1);
+    gameEl("goBarFill").style.width = clamp(left / total, 0, 1) * 100 + "%";
+    if (left <= 0) { startAnswerPhase(); return; }
+    g.rafId = requestAnimationFrame(observeTick);
+  }
+
+  function sizeGameCanvas() {
+    if (!gameCanvas) return;
+    const rect = gameCanvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dpr = window.devicePixelRatio || 1;
+    gameCssW = rect.width; gameCssH = rect.height;
+    gameCanvas.width = Math.round(gameCssW * dpr);
+    gameCanvas.height = Math.round(gameCssH * dpr);
+    gameCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  // ---- 回答フェーズ ----
+  function startAnswerPhase() {
+    const g = state.game;
+    clearGameTimers();
+    g.phase = "answer";
+    gameEl("gameOverlay").hidden = true;
+    buildTargets();
+    showGameSection("answer");
+    renderChips();
+  }
+
+  // 対象の駒をトレイ(盤面中央)に並べる
+  function buildTargets() {
+    const g = state.game;
+    const wantHome = g.scope !== "away";
+    const rows = { home: [], away: [] };
+    state.pieces.forEach(function (p) {
+      if (p.id === g.camId) return;                 // 視点選手は基準点として残す
+      if (p.team === "home" && !wantHome) return;
+      rows[p.team].push(p);
+    });
+
+    g.targets = [];
+    ["home", "away"].forEach(function (team) {
+      const list = rows[team];
+      const y = team === "home" ? GAME_TRAY.homeY : GAME_TRAY.awayY;
+      list.forEach(function (p, i) {
+        const x = W * (i + 1) / (list.length + 1);
+        g.targets.push({ id: p.id, num: p.num, team: team, isBall: false, obj: p, trayX: x, trayY: y, placed: false });
+        setPiecePos(p, x, y);
+        p.el.classList.add("tray");
+        p.el.classList.remove("has-ball");
+      });
+    });
+
+    if (g.scope === "allball") {
+      detachBall();
+      g.targets.push({ id: "ball", num: "", team: "ball", isBall: true, obj: state.ball, trayX: W / 2, trayY: GAME_TRAY.ballY, placed: false });
+      setBallPos(state.ball, W / 2, GAME_TRAY.ballY);
+      state.ball.el.classList.add("tray");
+    } else {
+      // 対象外のボールは邪魔なので視点選手の位置ではなく正解位置のまま残す
+      state.ball.el.classList.remove("tray");
+    }
+
+    // 視点選手を強調 & 固定
+    const cam = state.pieces.find(function (p) { return p.id === g.camId; });
+    if (cam) { cam.el.classList.remove("tray"); cam.el.classList.add("locked"); }
+    g.nextIdx = 0;
+  }
+
+  function isGameTarget(id) {
+    return state.game.targets.some(function (t) { return t.id === id; });
+  }
+
+  function nextTarget() {
+    const g = state.game;
+    if (g.targets[g.nextIdx] && !g.targets[g.nextIdx].placed) return g.targets[g.nextIdx];
+    const i = g.targets.findIndex(function (t) { return !t.placed; });
+    g.nextIdx = i;
+    return i >= 0 ? g.targets[i] : null;
+  }
+
+  function markPlaced(id) {
+    const g = state.game;
+    const t = g.targets.find(function (x) { return x.id === id; });
+    if (!t) return;
+    if (!t.placed) {
+      t.placed = true;
+      t.obj.el.classList.remove("tray");
+    }
+    if (g.targets[g.nextIdx] === t) nextTarget();
+    renderChips();
+  }
+
+  // 盤面タップで「次の駒」を置く
+  function gameTapPlace(x, y) {
+    const t = nextTarget();
+    if (!t) return;
+    if (t.isBall) setBallPos(t.obj, x, y); else setPiecePos(t.obj, x, y);
+    markPlaced(t.id);
+  }
+
+  function targetLabel(t) {
+    if (t.isBall) return "ボール";
+    return (t.team === "home" ? "自" : "相") + t.num;
+  }
+
+  function renderChips() {
+    const g = state.game;
+    const box = gameEl("gameChips");
+    box.innerHTML = "";
+    const nxt = g.targets[g.nextIdx];
+    g.targets.forEach(function (t, i) {
+      const b = document.createElement("button");
+      b.className = "chip " + t.team + (t.placed ? " done" : "") + (t === nxt ? " next" : "");
+      b.textContent = targetLabel(t);
+      b.onclick = function () { g.nextIdx = i; renderChips(); };
+      box.appendChild(b);
+    });
+    const done = g.targets.filter(function (t) { return t.placed; }).length;
+    gameEl("gamePlacedLabel").textContent = "配置 " + done + " / " + g.targets.length +
+      (nxt ? "　次: " + targetLabel(nxt) : "　すべて配置済み");
+    // 盤上でも「次に置く駒」を光らせる
+    state.game.targets.forEach(function (t) { t.obj.el.classList.toggle("next-place", t === nxt); });
+  }
+
+  // ---- 採点 ----
+  function submitAnswer() {
+    const g = state.game;
+    if (g.phase !== "answer") return;
+    const results = g.targets.map(function (t) {
+      const truth = t.isBall ? g.truth.ball : g.truth.positions[t.id];
+      const guess = { x: t.obj.x, y: t.obj.y };
+      const d = Math.hypot(guess.x - truth.x, guess.y - truth.y) * FPV.S;
+      const pt = t.placed ? Math.round(100 * clamp(1 - d / SCORE_MAX_ERR, 0, 1)) : 0;
+      return { t: t, truth: truth, guess: guess, d: d, pt: pt, placed: t.placed, isBall: t.isBall, num: t.num, team: t.team };
+    });
+    g.phase = "result";
+    state.pieces.forEach(function (p) { p.el.classList.remove("tray", "next-place"); });
+    state.ball.el.classList.remove("tray");
+    drawGameGhosts(results);
+    showResult(results);
+  }
+
+  function errColor(d) { return d < 2 ? "#37d67a" : (d < 4 ? "#ffd166" : "#ff8a8d"); }
+
+  function drawGameGhosts(results) {
+    layers.gameGhosts.innerHTML = "";
+    results.forEach(function (r) {
+      const col = errColor(r.d);
+      if (r.placed) {
+        layers.gameGhosts.appendChild(el("line", {
+          x1: r.guess.x, y1: r.guess.y, x2: r.truth.x, y2: r.truth.y,
+          stroke: col, "stroke-width": 2.5, "stroke-dasharray": "5 4", opacity: .9,
+        }));
+      }
+      layers.gameGhosts.appendChild(el("circle", {
+        cx: r.truth.x, cy: r.truth.y, r: r.isBall ? 13 : 20,
+        fill: "rgba(0,0,0,.25)", stroke: col, "stroke-width": 2.5, "stroke-dasharray": "5 4",
+      }));
+      const t = el("text", { x: r.truth.x, y: r.truth.y + 5, "text-anchor": "middle", fill: col, "font-size": 15, "font-weight": 700 });
+      t.textContent = r.isBall ? "●" : r.num;
+      layers.gameGhosts.appendChild(t);
+    });
+  }
+
+  function rankOf(s) { return s >= 90 ? "S" : s >= 75 ? "A" : s >= 60 ? "B" : s >= 40 ? "C" : "D"; }
+
+  function showResult(results) {
+    const n = results.length || 1;
+    const score = Math.round(results.reduce(function (a, r) { return a + r.pt; }, 0) / n);
+    const avgErr = results.reduce(function (a, r) { return a + r.d; }, 0) / n;
+    const rank = rankOf(score);
+    const isBest = saveBest(score);
+
+    const rk = gameEl("scoreRank");
+    rk.textContent = rank;
+    rk.className = "score-rank r-" + rank;
+    gameEl("scoreValue").textContent = score;
+    gameEl("scoreSub").innerHTML =
+      "平均誤差 " + avgErr.toFixed(1) + " m ・ " + GAME_DIFF_LABEL[state.game.difficulty] +
+      "(" + GAME_TIMES[state.game.difficulty] + "秒) ・ " + GAME_SCOPE_LABEL[state.game.scope] +
+      (isBest ? '<br><b style="color:#ffd166">🎉 ベスト更新!</b>' : "");
+
+    const list = gameEl("errList");
+    list.innerHTML = "";
+    results.slice().sort(function (a, b) { return b.d - a.d; }).forEach(function (r) {
+      const li = document.createElement("li");
+      const col = r.team === "home" ? "#e5484d" : r.team === "away" ? "#2f7de1" : "#f4f4f4";
+      const cls = r.pt >= 75 ? "good" : r.pt >= 40 ? "mid" : "bad";
+      li.innerHTML =
+        '<span class="e-name"><span class="e-dot" style="background:' + col + '"></span>' +
+        (r.isBall ? "ボール" : (r.team === "home" ? "自" : "相手") + " " + r.num) + "</span>" +
+        '<span class="e-val">' + (r.placed ? r.d.toFixed(1) + " m" : "未配置") + "</span>" +
+        '<span class="e-pt ' + cls + '">' + r.pt + "</span>";
+      list.appendChild(li);
+    });
+
+    showGameSection("result");
+    renderBest();
+  }
+
+  // ---- 終了 / リセット ----
+  function exitGame() {
+    const g = state.game;
+    clearGameTimers();
+    g.phase = "idle";
+    gameEl("gameOverlay").hidden = true;
+    layers.gameGhosts.innerHTML = "";
+    state.pieces.forEach(function (p) { p.el.classList.remove("tray", "next-place", "locked"); });
+    state.ball.el.classList.remove("tray");
+
+    // 開始前の盤面へ戻す
+    if (g.before) {
+      if (g.beforeForm) {
+        gameEl("formationHome").value = g.beforeForm.home;
+        gameEl("formationAway").value = g.beforeForm.away;
+      }
+      applySnapshot(g.before);
+      detachBall();
+      if (g.beforeOwner) {
+        const o = state.pieces.find(function (p) { return p.id === g.beforeOwner; });
+        if (o) attachBallTo(o);
+      }
+    }
+    const sel = gameEl("fpvSelect");
+    sel.value = g.beforeFpv || "";
+    setFpvPlayer(g.beforeFpv || "");
+
+    g.targets = [];
+    g.truth = null;
+    g.before = null;
+    setGameUiLock(false);
+    showGameSection("setup");
+    renderBest();
+  }
+
+  function abortGame() {
+    exitGame();
+  }
+
+  // ゲーム中は盤面を壊す操作を禁止
+  function setGameUiLock(on) {
+    ["formationHome", "formationAway", "modeMove", "modeDraw", "clearArrows", "resetBtn",
+     "fpvSelect", "captureBtn", "updateBtn", "clearFramesBtn", "playBtn", "firstBtn",
+     "prevBtn", "nextBtn", "lastBtn", "loopBtn", "trailsBtn", "timeline"].forEach(function (id) {
+      const n = gameEl(id);
+      if (n) n.disabled = on;
+    });
+    if (on) hideArrowDelete();
+    else syncSimUI();
+  }
+
+  function initGame() {
+    gameCanvas = gameEl("gameCanvas");
+    gameCtx = gameCanvas.getContext("2d");
+    attachLookDrag(gameCanvas);
+
+    // 視点の選手セレクト
+    const cam = gameEl("gameCam");
+    cam.appendChild(new Option("ランダム", "random"));
+    [["home", "自チーム"], ["away", "相手チーム"]].forEach(function (t) {
+      const og = document.createElement("optgroup");
+      og.label = t[1];
+      for (let i = 1; i <= 8; i++) { const id = t[0] + i; og.appendChild(new Option(fpvLabel(id), id)); }
+      cam.appendChild(og);
+    });
+    cam.value = "home1";
+
+    // 難易度ボタン
+    Array.prototype.forEach.call(document.querySelectorAll("#gameDiffs .dbtn"), function (b) {
+      b.onclick = function () {
+        document.querySelectorAll("#gameDiffs .dbtn").forEach(function (x) { x.classList.remove("active"); });
+        b.classList.add("active");
+        state.game.difficulty = b.dataset.diff;
+        renderBest();
+      };
+    });
+    gameEl("gameScope").onchange = function () { state.game.scope = this.value; renderBest(); };
+
+    gameEl("gameStartRandom").onclick = function () { startGame(false); };
+    gameEl("gameStartCurrent").onclick = function () { startGame(true); };
+    gameEl("gameSubmit").onclick = submitAnswer;
+    gameEl("gameQuit").onclick = abortGame;
+    gameEl("gameExit").onclick = exitGame;
+    gameEl("gameAgain").onclick = function () {
+      const useCurrent = false;
+      layers.gameGhosts.innerHTML = "";
+      // 前回の「開始前の盤面」を保ったまま再出題する
+      const keep = { before: state.game.before, owner: state.game.beforeOwner, fpv: state.game.beforeFpv, form: state.game.beforeForm };
+      startGame(useCurrent);
+      state.game.before = keep.before;
+      state.game.beforeOwner = keep.owner;
+      state.game.beforeFpv = keep.fpv;
+      state.game.beforeForm = keep.form;
+    };
+    gameEl("gameShowTruth").onclick = function () {
+      if (state.game.truth) applySnapshot(state.game.truth);
+    };
+
+    // 観察オーバーレイの操作
+    gameEl("goLeft").onclick = function () { nudgeYaw(-20); };
+    gameEl("goRight").onclick = function () { nudgeYaw(20); };
+    gameEl("goReset").onclick = function () { faceDefault(); };
+    gameEl("goYaw").oninput = function () { state.fpv.yaw = parseFloat(this.value); syncYawSlider(); };
+    gameEl("goAbort").onclick = abortGame;
+
+    // 盤面タップで次の駒を置く (回答フェーズのみ)
+    pitch.addEventListener("pointerdown", function (e) {
+      if (state.game.phase !== "answer") return;
+      if (e.target.closest && e.target.closest(".piece")) return; // 駒の上はドラッグ扱い
+      const p = toSvg(clientX(e), clientY(e));
+      gameTapPlace(p.x, p.y);
+    });
+
+    window.addEventListener("resize", function () { if (state.game.phase === "observe") sizeGameCanvas(); });
+
+    showGameSection("setup");
+    renderBest();
+  }
+
   // ---------- 简易登录 (仅前端门禁, 非真正安全) ----------
   function initLogin() {
     const USER = "komabayashi", PASS = "1974";
@@ -1105,11 +1611,13 @@
     initDefs();
     drawPitch();
     layers.fpvCone = el("g", { class: "fpv-cone-layer" }); // 视野扇形 (球场线之上、棋子之下)
+    layers.gameGhosts = el("g", { class: "game-ghost-layer" }); // 記憶ゲームの正解ゴースト
     layers.trails = el("g", { class: "trails-layer" });
     layers.arrows = el("g", { class: "arrows-layer" });
     layers.pieces = el("g", { class: "pieces-layer" });
     layers.arrowUI = el("g", { class: "arrow-ui-layer" }); // 删除按钮置于最上层
     pitch.appendChild(layers.fpvCone);
+    pitch.appendChild(layers.gameGhosts);
     pitch.appendChild(layers.trails);
     pitch.appendChild(layers.arrows);
     pitch.appendChild(layers.pieces);
@@ -1119,6 +1627,7 @@
     initArrowDrawing();
     initUI();
     initFPV();
+    initGame();
     renderFrameList();
     syncSimUI();
   }
