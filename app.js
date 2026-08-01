@@ -47,6 +47,7 @@
       phase: "idle",     // idle | observe | answer | result
       difficulty: "normal",
       scope: "all",      // away | all | allball
+      match: "pos",      // pos = 位置だけ合えばOK(チーム内で最適配対) / num = 背番号も一致必須
       camId: null,       // 視点選手 (答えフェーズでも盤上に残る基準点)
       truth: null,       // 出題時の配置 (正解)
       before: null,      // ゲーム開始前の盤面 (終了時に復元)
@@ -64,6 +65,7 @@
   const GAME_TIMES = { easy: 10, normal: 8, hard: 5, hell: 3 };
   const GAME_DIFF_LABEL = { easy: "簡単", normal: "普通", hard: "難しい", hell: "地獄" };
   const GAME_SCOPE_LABEL = { away: "相手のみ", all: "全員", allball: "全員+ボール" };
+  const GAME_MATCH_LABEL = { pos: "位置のみ", num: "背番号も" };
 
   // ---------- 工具 ----------
   function el(tag, attrs) {
@@ -1143,7 +1145,7 @@
   }
 
   // ---- ベストスコア ----
-  function bestKey() { return state.game.difficulty + "_" + state.game.scope; }
+  function bestKey() { return state.game.difficulty + "_" + state.game.scope + "_" + state.game.match; }
   function loadBests() {
     try { return JSON.parse(localStorage.getItem("fv_game_best") || "{}"); } catch (e) { return {}; }
   }
@@ -1157,7 +1159,8 @@
     const box = gameEl("gameBest");
     if (!box) return;
     const b = loadBests()[bestKey()];
-    const cond = GAME_DIFF_LABEL[state.game.difficulty] + " / " + GAME_SCOPE_LABEL[state.game.scope];
+    const cond = GAME_DIFF_LABEL[state.game.difficulty] + " / " + GAME_SCOPE_LABEL[state.game.scope] +
+      " / " + GAME_MATCH_LABEL[state.game.match];
     box.innerHTML = b === undefined
       ? "ベスト: " + cond + " — まだ記録なし"
       : "ベスト: " + cond + " — <b>" + b + " 点</b>";
@@ -1196,6 +1199,7 @@
     const g = state.game;
     g.difficulty = document.querySelector("#gameDiffs .dbtn.active").dataset.diff;
     g.scope = gameEl("gameScope").value;
+    g.match = gameEl("gameMatch").value;
 
     // 開始前の盤面を保存 (終了時に元へ戻す)
     g.before = snapshot();
@@ -1379,18 +1383,71 @@
   function submitAnswer() {
     const g = state.game;
     if (g.phase !== "answer") return;
-    const results = g.targets.map(function (t) {
-      const truth = t.isBall ? g.truth.ball : g.truth.positions[t.id];
-      const guess = { x: t.obj.x, y: t.obj.y };
-      const d = Math.hypot(guess.x - truth.x, guess.y - truth.y) * FPV.S;
-      const pt = t.placed ? Math.round(100 * clamp(1 - d / SCORE_MAX_ERR, 0, 1)) : 0;
-      return { t: t, truth: truth, guess: guess, d: d, pt: pt, placed: t.placed, isBall: t.isBall, num: t.num, team: t.team };
+
+    const base = g.targets.map(function (t) {
+      return {
+        t: t,
+        guess: { x: t.obj.x, y: t.obj.y },
+        truth: t.isBall ? g.truth.ball : g.truth.positions[t.id],
+        placed: t.placed,
+      };
+    });
+    // 「位置だけ合えばOK」なら、チーム内で合計点が最大になる組み合わせに割り当て直す
+    if (g.match === "pos") reassignByPosition(base);
+
+    const results = base.map(function (b) {
+      const d = Math.hypot(b.guess.x - b.truth.x, b.guess.y - b.truth.y) * FPV.S;
+      return {
+        t: b.t, truth: b.truth, guess: b.guess, d: d, pt: b.placed ? pointsFor(d) : 0,
+        placed: b.placed, isBall: b.t.isBall, num: b.t.num, team: b.t.team,
+      };
     });
     g.phase = "result";
     state.pieces.forEach(function (p) { p.el.classList.remove("tray", "next-place"); });
     state.ball.el.classList.remove("tray");
     drawGameGhosts(results);
     showResult(results);
+  }
+
+  function pointsFor(d) { return Math.round(100 * clamp(1 - d / SCORE_MAX_ERR, 0, 1)); }
+
+  // 背番号を問わない採点。チームごとに、合計点が最大になる
+  // 「解答 ↔ 正解位置」の対応を総当たりで探す (1チーム最大8人なので 8!=40320 通り)
+  function reassignByPosition(base) {
+    ["home", "away"].forEach(function (team) {
+      const grp = base.filter(function (b) { return !b.t.isBall && b.t.team === team; });
+      if (grp.length < 2) return;
+      const truths = grp.map(function (b) { return b.truth; });
+      const perm = bestPairing(grp, truths);
+      perm.forEach(function (ti, i) { grp[i].truth = truths[ti]; });
+    });
+    // ボールはボールとしか対応しないのでそのまま
+  }
+
+  function bestPairing(grp, truths) {
+    const n = grp.length;
+    // 事前に全組み合わせの点数表を作る (未配置は何に当てても0点)
+    const pts = grp.map(function (b) {
+      return truths.map(function (tr) {
+        if (!b.placed) return 0;
+        return pointsFor(Math.hypot(b.guess.x - tr.x, b.guess.y - tr.y) * FPV.S);
+      });
+    });
+    const order = [];
+    for (let i = 0; i < n; i++) order.push(i);
+    let bestSum = -1, bestPerm = order.slice();
+    (function search(k, sum) {
+      if (k === n) {
+        if (sum > bestSum) { bestSum = sum; bestPerm = order.slice(); }
+        return;
+      }
+      for (let i = k; i < n; i++) {
+        const tmp = order[k]; order[k] = order[i]; order[i] = tmp;
+        search(k + 1, sum + pts[k][order[k]]);
+        const t2 = order[k]; order[k] = order[i]; order[i] = t2;
+      }
+    })(0, 0);
+    return bestPerm;
   }
 
   function errColor(d) { return d < 2 ? "#37d67a" : (d < 4 ? "#ffd166" : "#ff8a8d"); }
@@ -1431,6 +1488,7 @@
     gameEl("scoreSub").innerHTML =
       "平均誤差 " + avgErr.toFixed(1) + " m ・ " + GAME_DIFF_LABEL[state.game.difficulty] +
       "(" + GAME_TIMES[state.game.difficulty] + "秒) ・ " + GAME_SCOPE_LABEL[state.game.scope] +
+      "<br>採点: " + (state.game.match === "pos" ? "位置だけ(背番号は不問)" : "背番号も一致") +
       (isBest ? '<br><b style="color:#ffd166">🎉 ベスト更新!</b>' : "");
 
     const list = gameEl("errList");
@@ -1528,6 +1586,7 @@
       };
     });
     gameEl("gameScope").onchange = function () { state.game.scope = this.value; renderBest(); };
+    gameEl("gameMatch").onchange = function () { state.game.match = this.value; renderBest(); };
 
     gameEl("gameStartRandom").onclick = function () { startGame(false); };
     gameEl("gameStartCurrent").onclick = function () { startGame(true); };

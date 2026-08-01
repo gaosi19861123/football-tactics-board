@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>サッカー戦術ボード · 8人制</title>
-<link rel="stylesheet" href="style.css?v=15" />
+<link rel="stylesheet" href="style.css?v=16" />
 </head>
 <body>
 <div id="loginOverlay" class="login-overlay">
@@ -89,6 +89,12 @@
             <option value="allball">全員 + ボール (16個)</option>
           </select>
 
+          <label class="game-label" for="gameMatch">採点方法</label>
+          <select id="gameMatch" class="select full">
+            <option value="pos" selected>位置だけ合えばOK（やさしい）</option>
+            <option value="num">背番号も合わせる（厳しい）</option>
+          </select>
+
           <label class="game-label" for="gameCam">視点の選手</label>
           <select id="gameCam" class="select full"></select>
 
@@ -163,6 +169,7 @@
         <p class="hint">マウスでドラッグできます。タブレット/スマホは指でコマを直接動かせます。</p>
         <p class="hint">「移動」モードで矢印をクリックすると、削除ボタン(×)が出て1本ずつ消せます。</p>
         <p class="hint">🎯 記憶ゲーム: 一人称視点を制限時間内(10/8/5/3秒)だけ見て、全員の位置を盤面で再現します。誤差(m)から採点され、0〜100点とランク(S〜D)が出ます。首を振って周りを把握する練習になります。</p>
+        <p class="hint">採点方法は2つ。「位置だけ合えばOK」は背番号が違っても、チーム内で一番良い組み合わせを自動で探して採点します(配置の形を覚える練習)。「背番号も合わせる」は番号まで一致させる必要があります。</p>
       </section>
     </aside>
   </main>
@@ -183,6 +190,6 @@
   <p class="go-hint">画面をドラッグ、またはボタン/スライダーで見回して、全員の位置を覚えてください。</p>
   <button id="goAbort" class="btn ghost go-abort">中止</button>
 </div>
-<script src="app.js?v=15"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>
