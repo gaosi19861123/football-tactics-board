@@ -47,6 +47,7 @@
       phase: "idle",     // idle | observe | answer | result
       difficulty: "normal",
       scope: "all",      // away | all | allball
+      count: 0,          // 1チームの出場人数(GK込み)。0 = ゲーム外で全員出場
       match: "pos",      // pos = 位置だけ合えばOK(チーム内で最適配対) / num = 背番号も一致必須
       camId: null,       // 視点選手 (答えフェーズでも盤上に残る基準点)
       truth: null,       // 出題時の配置 (正解)
@@ -63,6 +64,8 @@
 
   // 難易度 = 観察できる秒数
   const GAME_TIMES = { easy: 10, normal: 8, hard: 5, hell: 3 };
+  // 難易度は「見られる秒数」と「出場人数(1チームあたり、GK込み)」の両方で決まる
+  const GAME_COUNTS = { easy: 3, normal: 5, hard: 7, hell: 8 };
   const GAME_DIFF_LABEL = { easy: "簡単", normal: "普通", hard: "難しい", hell: "地獄" };
   const GAME_SCOPE_LABEL = { away: "相手のみ", all: "全員", allball: "全員+ボール" };
   const GAME_MATCH_LABEL = { pos: "位置のみ", num: "背番号も" };
@@ -1023,7 +1026,7 @@
     // 收集棋子 & 球, 由远及近绘制
     const items = [];
     state.pieces.forEach(function (p) {
-      if (p.id === cam.id) return;
+      if (p.id === cam.id || !isActive(p)) return;
       const g = camPt(p.x, p.y, 0);
       if (g.z < FPV.NEAR) return;
       items.push({ z: g.z, type: "player", p: p, g: g });
@@ -1133,8 +1136,9 @@
   // 一人称視点だけを制限時間内に見る → 上からの盤面で全員の位置を再現 → 正解と比較して採点
 
   const GAME_TRAY = { homeY: 470, awayY: 545, ballY: 620 };
-  // この誤差(m)以上で0点。ピッチは約37×58mなので、
-  // 3m→75点 / 6m→50点 / 9m→25点 くらいの手応えになる
+  // 2m以内はピッタリ扱い(100点)。そこからの超過分が12mで0点になる。
+  // つまり 2m→100点 / 5m→75点 / 8m→50点 / 14m以上→0点
+  const SCORE_FREE = 2;
   const SCORE_MAX_ERR = 12;
 
   function gameEl(id) { return document.getElementById(id); }
@@ -1183,11 +1187,22 @@
   ];
   const DEF_SHAPES = [[3, 3, 1], [3, 2, 2], [2, 3, 2], [3, 3, 1]];
 
+  // 出場人数に応じた並び(GKを除いたフィールド選手の行構成)
+  const ATK_SHAPES = { 2: [[1, 1]], 4: [[2, 1, 1], [2, 2], [1, 2, 1]], 6: [[3, 2, 1], [2, 3, 1], [3, 3], [2, 2, 2]] };
+  const DEF_SHAPES_BY = { 2: [[1, 1]], 4: [[2, 2], [2, 1, 1]], 6: [[3, 2, 1], [3, 3], [2, 3, 1]] };
+
   function rnd(a, b) { return a + Math.random() * (b - a); }
   function pickOne(a) { return a[Math.floor(Math.random() * a.length)]; }
+  // 出場している選手か (背番号が出場人数以内)。ゲーム外(count=0)は全員
+  function isActive(p) { return !state.game.count || p.num <= state.game.count; }
   function teamPieces(team) {
-    return state.pieces.filter(function (p) { return p.team === team; })
+    return state.pieces.filter(function (p) { return p.team === team && isActive(p); })
       .sort(function (a, b) { return a.num - b.num; });
+  }
+  // 出場人数を反映(範囲外の選手は盤面からも一人称視点からも消す)
+  function applyActiveCount(count) {
+    state.game.count = count;
+    state.pieces.forEach(function (p) { p.el.classList.toggle("out", !!count && p.num > count); });
   }
   // 深さ d(0=自ゴール, 1=相手ゴール) と横位置 fx(0=左, 1=右) → SVG座標
   function depthPt(team, d, fx) {
@@ -1234,8 +1249,9 @@
 
   // 攻撃側: ボールを中心に前後へ展開し、幅を大きく取る
   function placeAttackers(team, bd, bfx, sc, ball, offside) {
-    const rows = FORMATIONS[pickOne(Object.keys(FORMATIONS))];
     const ps = teamPieces(team);
+    const fieldN = ps.length - 1;
+    const rows = fieldN >= 7 ? FORMATIONS[pickOne(Object.keys(FORMATIONS))] : pickOne(ATK_SHAPES[fieldN]);
 
     // GKは押し上げる(ボールが前にあるほど高い位置=スイーパー気味)
     putAt(ps[0], depthPt(team, clamp(0.05 + bd * 0.13, 0.05, 0.20), 0.5 + (bfx - 0.5) * 0.35), 0.5);
@@ -1268,7 +1284,8 @@
     const gapV = sc.stretch ? 0.15 : 0.10;                 // ライン間の距離(縦のコンパクトさ)
     const width = sc.stretch ? 0.62 : 0.46;                // ブロックの幅(横のコンパクトさ)
     const center = clamp(0.5 + (bfx - 0.5) * 0.75, 0.2, 0.8); // ボール側へスライド
-    const rows = pickOne(DEF_SHAPES);
+    const fieldN = ps.length - 1;
+    const rows = fieldN >= 7 ? pickOne(DEF_SHAPES) : pickOne(DEF_SHAPES_BY[fieldN]);
 
     let i = 1;
     rows.forEach(function (count, r) {
@@ -1291,10 +1308,11 @@
 
   // 駒同士が重ならないように軽く押し広げる
   function separatePieces(minD, iters) {
+    const list = state.pieces.filter(isActive);
     for (let k = 0; k < iters; k++) {
-      for (let i = 0; i < state.pieces.length; i++) {
-        for (let j = i + 1; j < state.pieces.length; j++) {
-          const a = state.pieces[i], b = state.pieces[j];
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const a = list[i], b = list[j];
           const dx = b.x - a.x, dy = b.y - a.y;
           const d = Math.hypot(dx, dy);
           if (d < minD && d > 0.01) {
@@ -1309,11 +1327,14 @@
 
   function resolveCamId() {
     const v = gameEl("gameCam").value;
-    if (v === "random") {
-      const pool = state.pieces;
-      return pool[Math.floor(Math.random() * pool.length)].id;
-    }
-    return v || "home1";
+    const pool = state.pieces.filter(isActive);          // 出場している選手からのみ選ぶ
+    if (v === "random") return pool[Math.floor(Math.random() * pool.length)].id;
+    const chosen = pool.find(function (p) { return p.id === v; });
+    if (chosen) return chosen.id;
+    // 人数が減って選べなくなっていたら、同じチームのGKに寄せる
+    const team = (v || "home1").slice(0, 4);
+    const same = pool.filter(function (p) { return p.team === team; });
+    return (same[0] || pool[0]).id;
   }
 
   function startGame(useCurrent) {
@@ -1331,6 +1352,7 @@
     pause();
     hideArrowDelete();
     setMode("move");
+    applyActiveCount(GAME_COUNTS[g.difficulty]);   // 難易度ぶんだけ出場させる
     if (!useCurrent) {
       realisticScene();
     } else {
@@ -1415,7 +1437,7 @@
     const wantHome = g.scope !== "away";
     const rows = { home: [], away: [] };
     state.pieces.forEach(function (p) {
-      if (p.id === g.camId) return;                 // 視点選手は基準点として残す
+      if (p.id === g.camId || !isActive(p)) return; // 視点選手は基準点として残す
       if (p.team === "home" && !wantHome) return;
       rows[p.team].push(p);
     });
@@ -1535,7 +1557,9 @@
     showResult(results);
   }
 
-  function pointsFor(d) { return Math.round(100 * clamp(1 - d / SCORE_MAX_ERR, 0, 1)); }
+  // 2m以内はズレとみなさない。それを超えた分だけを誤差として点を引く
+  function effErr(d) { return Math.max(0, d - SCORE_FREE); }
+  function pointsFor(d) { return Math.round(100 * clamp(1 - effErr(d) / SCORE_MAX_ERR, 0, 1)); }
 
   // 背番号を問わない採点。チームごとに、合計点が最大になる
   // 「解答 ↔ 正解位置」の対応を総当たりで探す (1チーム最大8人なので 8!=40320 通り)
@@ -1553,10 +1577,11 @@
   function bestPairing(grp, truths) {
     const n = grp.length;
     // 事前に全組み合わせの点数表を作る (未配置は何に当てても0点)
+    // 2m以内は同点になりやすいので、同点なら距離が近い方を選ぶよう重み付けする
     const pts = grp.map(function (b) {
       return truths.map(function (tr) {
-        if (!b.placed) return 0;
-        return pointsFor(Math.hypot(b.guess.x - tr.x, b.guess.y - tr.y) * FPV.S);
+        const d = Math.hypot(b.guess.x - tr.x, b.guess.y - tr.y) * FPV.S;
+        return (b.placed ? pointsFor(d) : 0) * 10000 - d;
       });
     });
     const order = [];
@@ -1576,7 +1601,7 @@
     return bestPerm;
   }
 
-  function errColor(d) { return d < 2 ? "#37d67a" : (d < 4 ? "#ffd166" : "#ff8a8d"); }
+  function errColor(d) { return d <= SCORE_FREE ? "#37d67a" : (d < 5 ? "#ffd166" : "#ff8a8d"); }
 
   function drawGameGhosts(results) {
     layers.gameGhosts.innerHTML = "";
@@ -1645,6 +1670,7 @@
     g.phase = "idle";
     gameEl("gameOverlay").hidden = true;
     layers.gameGhosts.innerHTML = "";
+    applyActiveCount(0);                          // 全員を盤面に戻す
     state.pieces.forEach(function (p) { p.el.classList.remove("tray", "next-place", "locked"); });
     state.ball.el.classList.remove("tray");
 
@@ -1689,21 +1715,32 @@
     else syncSimUI();
   }
 
-  function initGame() {
-    gameCanvas = gameEl("gameCanvas");
-    gameCtx = gameCanvas.getContext("2d");
-    attachLookDrag(gameCanvas);
+  // 難易度で出場人数が変わるので、人数表示と「視点の選手」の選択肢を作り直す
+  function refreshForCount() {
+    const n = GAME_COUNTS[state.game.difficulty];
+    const sel = gameEl("gameScope");
+    sel.options[0].textContent = "相手チームのみ (" + n + "人)";
+    sel.options[1].textContent = "全員 (" + (2 * n - 1) + "人)";
+    sel.options[2].textContent = "全員 + ボール (" + (2 * n) + "個)";
 
-    // 視点の選手セレクト
     const cam = gameEl("gameCam");
+    const prev = cam.value;
+    cam.innerHTML = "";
     cam.appendChild(new Option("ランダム", "random"));
     [["home", "自チーム"], ["away", "相手チーム"]].forEach(function (t) {
       const og = document.createElement("optgroup");
       og.label = t[1];
-      for (let i = 1; i <= 8; i++) { const id = t[0] + i; og.appendChild(new Option(fpvLabel(id), id)); }
+      for (let i = 1; i <= n; i++) { const id = t[0] + i; og.appendChild(new Option(fpvLabel(id), id)); }
       cam.appendChild(og);
     });
-    cam.value = "home1";
+    const keep = Array.prototype.some.call(cam.options, function (o) { return o.value === prev; });
+    cam.value = keep ? prev : "home1";
+  }
+
+  function initGame() {
+    gameCanvas = gameEl("gameCanvas");
+    gameCtx = gameCanvas.getContext("2d");
+    attachLookDrag(gameCanvas);
 
     // 難易度ボタン
     Array.prototype.forEach.call(document.querySelectorAll("#gameDiffs .dbtn"), function (b) {
@@ -1711,9 +1748,11 @@
         document.querySelectorAll("#gameDiffs .dbtn").forEach(function (x) { x.classList.remove("active"); });
         b.classList.add("active");
         state.game.difficulty = b.dataset.diff;
+        refreshForCount();
         renderBest();
       };
     });
+    refreshForCount();
     gameEl("gameScope").onchange = function () { state.game.scope = this.value; renderBest(); };
     gameEl("gameMatch").onchange = function () { state.game.match = this.value; renderBest(); };
 

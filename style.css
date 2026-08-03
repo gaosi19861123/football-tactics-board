@@ -285,7 +285,7 @@ html, body {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   transition: background .12s ease, border-color .12s ease;
 }
-.dbtn span { font-size: 10px; color: var(--muted); }
+.dbtn span { font-size: 10px; color: var(--muted); line-height: 1.25; }
 .dbtn:hover { background: #26303c; }
 .dbtn.active { border-color: var(--accent); background: #17301f; color: #d7ffe7; }
 .dbtn.active span { color: #8fe0b0; }
@@ -331,6 +331,9 @@ html, body {
 .e-pt.good { color: var(--accent); }
 .e-pt.mid { color: #ffd166; }
 .e-pt.bad { color: #ff8a8d; }
+
+/* 出場していない駒(難易度で人数が減ったとき) */
+.piece.out { display: none; }
 
 /* トレイ(未配置)の駒 */
 .piece.tray { opacity: .5; }

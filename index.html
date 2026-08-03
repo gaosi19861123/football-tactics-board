@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>サッカー戦術ボード · 8人制</title>
-<link rel="stylesheet" href="style.css?v=17" />
+<link rel="stylesheet" href="style.css?v=18" />
 </head>
 <body>
 <div id="loginOverlay" class="login-overlay">
@@ -77,17 +77,17 @@
 
           <label class="game-label">難易度</label>
           <div class="game-diffs" id="gameDiffs">
-            <button class="dbtn" data-diff="easy">簡単<span>10秒</span></button>
-            <button class="dbtn active" data-diff="normal">普通<span>8秒</span></button>
-            <button class="dbtn" data-diff="hard">難しい<span>5秒</span></button>
-            <button class="dbtn" data-diff="hell">地獄<span>3秒</span></button>
+            <button class="dbtn" data-diff="easy">簡単<span>10秒</span><span>3対3</span></button>
+            <button class="dbtn active" data-diff="normal">普通<span>8秒</span><span>5対5</span></button>
+            <button class="dbtn" data-diff="hard">難しい<span>5秒</span><span>7対7</span></button>
+            <button class="dbtn" data-diff="hell">地獄<span>3秒</span><span>8対8</span></button>
           </div>
 
           <label class="game-label" for="gameScope">復元する対象</label>
           <select id="gameScope" class="select full">
-            <option value="away">相手チームのみ (8人)</option>
-            <option value="all" selected>全員 (15人)</option>
-            <option value="allball">全員 + ボール (16個)</option>
+            <option value="away">相手チームのみ</option>
+            <option value="all" selected>全員</option>
+            <option value="allball">全員 + ボール</option>
           </select>
 
           <label class="game-label" for="gameMatch">採点方法</label>
@@ -169,7 +169,7 @@
         </ul>
         <p class="hint">マウスでドラッグできます。タブレット/スマホは指でコマを直接動かせます。</p>
         <p class="hint">「移動」モードで矢印をクリックすると、削除ボタン(×)が出て1本ずつ消せます。</p>
-        <p class="hint">🎯 記憶ゲーム: 一人称視点を制限時間内(10/8/5/3秒)だけ見て、全員の位置を盤面で再現します。誤差(m)から採点され、0〜100点とランク(S〜D)が出ます。首を振って周りを把握する練習になります。</p>
+        <p class="hint">🎯 記憶ゲーム: 一人称視点を制限時間だけ見て、みんなの位置を盤面で再現します。難易度で「見られる秒数」と「出場人数」が変わります(簡単=10秒/3対3 … 地獄=3秒/8対8)。2m以内のズレは誤差なしとして満点、そこから離れるほど減点され、0〜100点とランク(S〜D)が出ます。</p>
         <p class="hint">採点方法は2つ。「位置だけ合えばOK」は背番号が違っても、チーム内で一番良い組み合わせを自動で探して採点します(配置の形を覚える練習)。「背番号も合わせる」は番号まで一致させる必要があります。</p>
       </section>
     </aside>
@@ -191,6 +191,6 @@
   <p class="go-hint">画面をドラッグ、またはボタン/スライダーで見回して、全員の位置を覚えてください。</p>
   <button id="goAbort" class="btn ghost go-abort">中止</button>
 </div>
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>
